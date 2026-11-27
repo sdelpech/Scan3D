@@ -30,7 +30,8 @@ struct PhotoCaptureView: View {
     @State private var coverage = CoverageTracker()
     @State private var isAutoCaptureOn = false
     @State private var density: Density = .dense
-    @State private var isGhostVisible = true
+    /// Calque de la photo précédente ; le choix est mémorisé d'une séance à l'autre.
+    @AppStorage("isGhostVisible") private var isGhostVisible = true
     @State private var showFlash = false
 
     var body: some View {
@@ -127,7 +128,8 @@ struct PhotoCaptureView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Toggle(isOn: $isGhostVisible) {
-                        Label("Calque", systemImage: "square.on.square.dashed")
+                        Label(isGhostVisible ? "Calque : oui" : "Calque : non",
+                              systemImage: isGhostVisible ? "square.on.square.dashed" : "square.dashed")
                             .font(.caption)
                     }
                     .toggleStyle(.button)
@@ -214,7 +216,7 @@ struct PhotoCaptureView: View {
 
     private func shoot() async {
         guard !camera.isTakingPhoto else { return }
-        guard await camera.takePhoto() else { return }
+        guard await camera.takePhoto(gravity: coverage.gravity) else { return }
         coverage.recordPhoto()
         showFlash = true
         withAnimation(.easeOut(duration: 0.25)) {

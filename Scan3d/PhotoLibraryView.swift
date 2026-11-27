@@ -5,6 +5,9 @@ import SwiftUI
 /// séries au Mac pour la reconstruction 3D.
 struct PhotoLibraryView: View {
     @State private var scans: [Scan] = []
+    /// Photos de chaque série, relues à chaque retour au menu. Une `Scan` ne change pas
+    /// quand on la complète : sans cet état, SwiftUI garderait l'ancien nombre de photos.
+    @State private var imagesByScan: [Scan.ID: [URL]] = [:]
     @State private var activeScan: Scan?
     @State private var errorMessage: String?
 
@@ -19,13 +22,19 @@ struct PhotoLibraryView: View {
                             .font(.headline)
                     }
                 } footer: {
-                    Text("Prenez 40 à 80 photos en tournant autour de l'objet, puis envoyez la série sur votre Mac (AirDrop) pour créer le modèle 3D avec cette même app.")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Prenez 40 à 80 photos en tournant autour de l'objet, puis envoyez la série sur votre Mac (AirDrop) pour créer le modèle 3D avec cette même app.")
+                        Text(AppVersion.label)
+                            .font(.caption2.monospacedDigit())
+                    }
                 }
 
                 if !scans.isEmpty {
                     Section("Mes séries") {
                         ForEach(scans) { scan in
-                            ScanRow(scan: scan)
+                            ScanRow(scan: scan, images: imagesByScan[scan.id] ?? []) {
+                                activeScan = scan
+                            }
                                 .swipeActions {
                                     Button("Supprimer", systemImage: "trash", role: .destructive) {
                                         delete(scan)
@@ -64,6 +73,7 @@ struct PhotoLibraryView: View {
             try? FileManager.default.removeItem(at: scan.folder)
         }
         scans = Scan.loadAll()
+        imagesByScan = Dictionary(uniqueKeysWithValues: scans.map { ($0.id, $0.imageURLs) })
     }
 
     private func delete(_ scan: Scan) {
@@ -74,9 +84,11 @@ struct PhotoLibraryView: View {
 
 private struct ScanRow: View {
     let scan: Scan
+    let images: [URL]
+    /// Rouvre la caméra pour ajouter des photos à cette série.
+    let onComplete: () -> Void
 
     var body: some View {
-        let images = scan.imageURLs
         HStack {
             VStack(alignment: .leading) {
                 Text(scan.date, format: .dateTime.day().month().year().hour().minute())
@@ -86,6 +98,10 @@ private struct ScanRow: View {
             }
 
             Spacer()
+
+            Button("Compléter", systemImage: "camera.badge.plus", action: onComplete)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
 
             ShareLink(items: images) {
                 Label("Envoyer au Mac", systemImage: "square.and.arrow.up")

@@ -59,4 +59,31 @@ struct Scan: Identifiable, Hashable {
             .filter { extensions.contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
+
+    /// Numéro de la prochaine photo « IMG_xxxx » : un de plus que le plus grand existant.
+    static func nextImageNumber(in folder: URL) -> Int {
+        let numbers = imageURLs(in: folder).compactMap { url -> Int? in
+            let name = url.deletingPathExtension().lastPathComponent
+            guard name.hasPrefix("IMG_") else { return nil }
+            return Int(name.dropFirst(4))
+        }
+        return (numbers.max() ?? 0) + 1
+    }
+}
+
+/// Vecteur gravité de l'iPhone au moment de la photo, stocké dans le commentaire EXIF
+/// (il voyage ainsi avec la photo, y compris par AirDrop).
+nonisolated enum GravityMetadata {
+    private static let prefix = "Scan3D gravity:"
+
+    static func comment(for gravity: SIMD3<Double>) -> String {
+        "\(prefix)\(gravity.x),\(gravity.y),\(gravity.z)"
+    }
+
+    static func gravity(fromComment comment: String) -> SIMD3<Double>? {
+        guard comment.hasPrefix(prefix) else { return nil }
+        let values = comment.dropFirst(prefix.count).split(separator: ",").compactMap { Double($0) }
+        guard values.count == 3 else { return nil }
+        return SIMD3(values[0], values[1], values[2])
+    }
 }

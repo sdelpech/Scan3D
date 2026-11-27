@@ -24,6 +24,13 @@ nonisolated enum OBJTools {
         return bounds
     }
 
+    /// Nombre de faces (triangles) d'un OBJ.
+    static func faceCount(of url: URL) throws -> Int {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return text.split(separator: "\n", omittingEmptySubsequences: true)
+            .reduce(0) { $0 + ($1.hasPrefix("f ") ? 1 : 0) }
+    }
+
     /// Écrit une copie de l'OBJ dont tous les sommets sont multipliés par `factor`.
     /// Les autres lignes (faces, normales, textures, matériaux) sont conservées telles quelles.
     static func writeScaledCopy(of url: URL, factor: Double, to output: URL) throws {

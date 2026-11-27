@@ -14,8 +14,17 @@ struct MacReconstructionView: View {
     @State private var isSequential = true
     @State private var isHighSensitivity = false
     @State private var isObjectMaskingEnabled = true
+    /// Gravité enregistrée par l'iPhone dans les photos ; désactivée, le dossier est lu
+    /// directement comme dans les premières versions. Choix mémorisé.
+    @AppStorage("usesGravity") private var usesGravity = true
     @State private var previewURL: URL?
     @State private var measuredFiles: ModelFiles?
+    /// Nombre de triangles du modèle affiché, lu dans l'OBJ.
+    @State private var triangleCount: Int?
+    @State private var targetTriangles = 50_000
+
+    /// Tailles proposées pour la version simplifiée.
+    private static let triangleTargets = [100_000, 50_000, 25_000, 10_000, 5_000, 2_000]
 
     var body: some View {
         if manager.isSupported {
@@ -60,14 +69,24 @@ struct MacReconstructionView: View {
                 Toggle("Photos prises dans l'ordre (en tournant autour)", isOn: $isSequential)
                 Toggle("Détection renforcée (objets peu texturés)", isOn: $isHighSensitivity)
                 Toggle("Isoler l'objet du décor", isOn: $isObjectMaskingEnabled)
+                Toggle("Utiliser la gravité enregistrée par l'iPhone", isOn: $usesGravity)
             }
             .disabled(isProcessing)
 
-            Section("3. Modèle 3D") {
+            Section {
                 reconstructionSection
+            } header: {
+                Text("3. Modèle 3D")
+            } footer: {
+                Text(AppVersion.label)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .task(id: finishedFolder) {
+            await loadTriangleCount()
+        }
         .frame(minWidth: 480, minHeight: 480)
         .fileImporter(isPresented: $isImporterPresented, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result {
@@ -97,7 +116,8 @@ struct MacReconstructionView: View {
                         detail: detail,
                         isSequential: isSequential,
                         isHighSensitivity: isHighSensitivity,
-                        isObjectMaskingEnabled: isObjectMaskingEnabled
+                        isObjectMaskingEnabled: isObjectMaskingEnabled,
+                        usesGravity: usesGravity
                     )
                 }
             }
@@ -106,10 +126,29 @@ struct MacReconstructionView: View {
 
         case .processing:
             ProgressView(value: manager.progress) {
-                Text("Reconstruction en cours…")
+                Text(manager.stage.isEmpty ? "Reconstruction en cours…" : manager.stage)
             } currentValueLabel: {
-                Text(manager.progress, format: .percent.precision(.fractionLength(0)))
+                HStack {
+                    Text(manager.progress, format: .percent.precision(.fractionLength(0)))
+                    if !manager.currentOutput.isEmpty {
+                        Text("· fichier \(manager.currentOutput) (\(manager.currentOutput == "USDZ" ? 1 : 2)/2)")
+                    }
+                }
             }
+            if let startDate = manager.startDate {
+                // Rafraîchi chaque seconde pour faire défiler le temps écoulé.
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    HStack {
+                        Text("Écoulé : \(Self.format(context.date.timeIntervalSince(startDate)))")
+                        if let remaining = manager.estimatedRemainingTime {
+                            Text("· Restant : environ \(Self.format(remaining))")
+                        }
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+            }
+            diagnostics
             Button("Annuler", role: .cancel) {
                 manager.cancel()
             }
@@ -117,6 +156,12 @@ struct MacReconstructionView: View {
         case .finished(let files):
             Label("Modèle créé (USDZ + OBJ)", systemImage: "checkmark.seal.fill")
                 .foregroundStyle(.green)
+            if let startDate = manager.startDate {
+                Text("Durée : \(Self.format(Date.now.timeIntervalSince(startDate)))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            diagnostics
             Text("Pour la CAO : mettez le modèle à l'échelle en mesurant une distance connue, puis importez l'OBJ en millimètres.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -135,14 +180,86 @@ struct MacReconstructionView: View {
                     manager.reset()
                 }
             }
+            if manager.canSimplify {
+                simplifyControls
+            }
 
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
+            diagnostics
             Button("Réessayer") {
                 manager.reset()
             }
         }
+    }
+
+    /// Recalcule le modèle avec moins de triangles. Le résultat est enregistré à part :
+    /// le modèle d'origine est conservé.
+    private var simplifyControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            Text("Alléger le maillage")
+                .font(.headline)
+            if let triangleCount {
+                Text("Modèle actuel : \(triangleCount.formatted()) triangles")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Picker("Triangles au maximum", selection: $targetTriangles) {
+                    ForEach(Self.triangleTargets, id: \.self) { count in
+                        Text(count.formatted()).tag(count)
+                    }
+                }
+                .fixedSize()
+                Button("Créer la version allégée", systemImage: "wand.and.sparkles") {
+                    Task { await manager.simplify(maximumTriangles: targetTriangles) }
+                }
+                .disabled(triangleCount.map { $0 <= targetTriangles } ?? false)
+            }
+            Text("Le maillage et les textures sont recalculés à partir des photos, en réutilisant l'alignement déjà fait. Le modèle d'origine est conservé.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Alertes et photos écartées par le moteur : elles indiquent quoi reprendre à la prise de vue.
+    @ViewBuilder
+    private var diagnostics: some View {
+        ForEach(manager.warnings, id: \.self) { warning in
+            Label(warning, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.callout)
+        }
+        if !manager.rejectedPhotos.isEmpty {
+            DisclosureGroup("\(manager.rejectedPhotos.count) photo(s) écartée(s) sur \(imageCount)") {
+                ForEach(manager.rejectedPhotos, id: \.self) { photo in
+                    Text(photo)
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+            }
+            .foregroundStyle(.orange)
+        }
+    }
+
+    /// Durée lisible, par exemple « 4 min 12 s ».
+    private static func format(_ seconds: TimeInterval) -> String {
+        Duration.seconds(max(0, seconds.rounded()))
+            .formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated))
+    }
+
+    /// Compte les triangles du modèle terminé (lecture de l'OBJ en arrière-plan).
+    private func loadTriangleCount() async {
+        triangleCount = nil
+        guard case .finished(let files) = manager.phase, let objURL = files.objURL else { return }
+        triangleCount = await Task.detached { try? OBJTools.faceCount(of: objURL) }.value
+    }
+
+    /// Dossier du modèle terminé, pour relire le nombre de triangles quand il change.
+    private var finishedFolder: URL? {
+        if case .finished(let files) = manager.phase { files.folder } else { nil }
     }
 
     private var isProcessing: Bool {

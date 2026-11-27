@@ -27,6 +27,9 @@ final class CoverageTracker {
     private(set) var currentSector = 0
     private(set) var currentRing: Ring = .middle
 
+    /// Dernier vecteur gravité mesuré (repère de l'iPhone), enregistré avec chaque photo.
+    @ObservationIgnored private(set) var gravity: SIMD3<Double>?
+
     private let motion = CMMotionManager()
     private var azimuth: Double = 0
     /// Direction visée par l'objectif (repère du monde) et celle de la dernière photo.
@@ -90,6 +93,7 @@ final class CoverageTracker {
 
     private func update(with data: CMDeviceMotion) {
         let g = data.gravity
+        gravity = SIMD3(g.x, g.y, g.z)
         let m = data.attitude.rotationMatrix
 
         // Inclinaison de l'objectif arrière : -90° = visée vers le bas, 0° = à l'horizontale.
